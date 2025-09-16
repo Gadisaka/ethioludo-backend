@@ -120,84 +120,61 @@ const withdrawFunds = async (req, res) => {
       return res.status(404).json({ message: "Wallet not found" });
     }
 
-    // Check if sufficient balance
+    // Check if sufficient balance (no fees)
     if (wallet.balance < amount) {
-      return res.status(400).json({ message: "Insufficient balance" });
-    }
-
-    // Calculate fees based on withdrawal method
-    let fee = 0;
-    switch (withdrawalMethod) {
-      case "telebirr":
-        fee = amount * 0.02; // 2%
-        break;
-      case "cbe":
-        fee = 0; // Free
-        break;
-      case "awash":
-        fee = amount * 0.01; // 1%
-        break;
-      case "ebirr":
-        fee = amount * 0.015; // 1.5%
-        break;
-      default:
-        fee = 0;
-    }
-
-    const totalDeduction = amount + fee;
-
-    if (wallet.balance < totalDeduction) {
       return res.status(400).json({
-        message: "Insufficient balance for withdrawal including fees",
-        requiredBalance: totalDeduction,
+        message: "Insufficient balance for withdrawal",
+        requiredBalance: amount,
         currentBalance: wallet.balance,
       });
     }
 
-    // Update balance
-    wallet.balance -= totalDeduction;
+    // Deduct balance immediately (balance is held until admin approval)
+    wallet.balance -= amount;
     await wallet.save();
 
-    // Create transaction record
+    // Create transaction record with PENDING status (no fees)
     const transaction = new Transaction({
-      amount: totalDeduction,
+      amount: amount,
       type: "WITHDRAW",
-      status: "COMPLETED",
-      description: `Withdrawal via ${withdrawalMethod} - Amount: ${amount} ብር, Fee: ${fee} ብር`,
+      status: "PENDING",
+      description: `Withdrawal via ${withdrawalMethod} - Amount: ${amount} ብር - Account: ${accountDetails}`,
       user: userId,
+      withdrawalMethod,
+      accountDetails,
     });
     await transaction.save();
 
-    // Create notification
+    // Create notification for pending withdrawal
     const notification = new Notification({
       user: userId,
-      message: `Successfully withdrew ${amount} ብር via ${withdrawalMethod}. Fee: ${fee} ብር`,
-      type: "SUCCESS",
+      message: `Withdrawal request submitted for ${amount} ብር via ${withdrawalMethod}. Amount deducted from balance. Awaiting admin approval.`,
+      type: "INFO",
     });
     await notification.save();
 
     // Emit socket event for real-time updates
     req.io.emit(`wallet_update_${userId}`, {
-      type: "WITHDRAW",
+      type: "WITHDRAW_PENDING",
       balance: wallet.balance,
-      amount: totalDeduction,
+      amount: amount,
       transactionId: transaction._id,
     });
 
     // Emit notification event
     req.io.emit(`notification_${userId}`, {
-      type: "WITHDRAW_SUCCESS",
-      message: `Successfully withdrew ${amount} ብር via ${withdrawalMethod}. Fee: ${fee} ብር`,
+      type: "WITHDRAW_PENDING",
+      message: `Withdrawal request submitted for ${amount} ብር via ${withdrawalMethod}. Amount deducted from balance. Awaiting admin approval.`,
       notificationId: notification._id,
     });
 
     res.status(200).json({
-      message: "Withdrawal successful",
-      newBalance: wallet.balance,
-      amountWithdrawn: amount,
-      fee,
-      totalDeduction,
+      message:
+        "Withdrawal request submitted successfully. Amount deducted from balance. Awaiting admin approval.",
+      newBalance: wallet.balance, // Balance is deducted
+      amountRequested: amount,
       transactionId: transaction._id,
+      status: "PENDING",
     });
   } catch (error) {
     console.error("Error withdrawing funds:", error);
@@ -459,10 +436,323 @@ const markAllNotificationsAsRead = async (req, res) => {
   }
 };
 
+// Approve pending withdrawal (admin only)
+const approveWithdrawal = async (req, res) => {
+  try {
+    const { transactionId } = req.params;
+
+    // Find the pending withdrawal transaction
+    const transaction = await Transaction.findById(transactionId);
+    if (!transaction) {
+      return res.status(404).json({ message: "Transaction not found" });
+    }
+
+    if (transaction.type !== "WITHDRAW") {
+      return res.status(400).json({ message: "Not a withdrawal transaction" });
+    }
+
+    if (transaction.status !== "PENDING") {
+      return res.status(400).json({ message: "Transaction is not pending" });
+    }
+
+    // Find user's wallet
+    const wallet = await Wallet.findOne({ user: transaction.user });
+    if (!wallet) {
+      return res.status(404).json({ message: "User wallet not found" });
+    }
+
+    // Balance is already deducted when withdrawal was submitted, just approve
+
+    // Update transaction status to completed
+    transaction.status = "COMPLETED";
+    transaction.description += " - Approved by admin";
+    await transaction.save();
+
+    // Create success notification
+    const notification = new Notification({
+      user: transaction.user,
+      message: `Withdrawal approved! ${transaction.amount} ብር has been processed via ${transaction.withdrawalMethod}`,
+      type: "SUCCESS",
+    });
+    await notification.save();
+
+    // Emit socket events
+    req.io.emit(`wallet_update_${transaction.user}`, {
+      type: "WITHDRAW_APPROVED",
+      balance: wallet.balance,
+      amount: transaction.amount,
+      transactionId: transaction._id,
+    });
+
+    req.io.emit(`notification_${transaction.user}`, {
+      type: "WITHDRAW_APPROVED",
+      message: `Withdrawal approved! ${transaction.amount} ብር has been processed via ${transaction.withdrawalMethod}`,
+      notificationId: notification._id,
+    });
+
+    res.status(200).json({
+      message: "Withdrawal approved successfully",
+      transactionId: transaction._id,
+      newBalance: wallet.balance,
+    });
+  } catch (error) {
+    console.error("Error approving withdrawal:", error);
+    res.status(500).json({
+      message: "Error approving withdrawal",
+      error: error.message,
+    });
+  }
+};
+
+// Reject pending withdrawal (admin only)
+const rejectWithdrawal = async (req, res) => {
+  try {
+    const { transactionId } = req.params;
+    const { reason } = req.body;
+
+    // Find the pending withdrawal transaction
+    const transaction = await Transaction.findById(transactionId);
+    if (!transaction) {
+      return res.status(404).json({ message: "Transaction not found" });
+    }
+
+    if (transaction.type !== "WITHDRAW") {
+      return res.status(400).json({ message: "Not a withdrawal transaction" });
+    }
+
+    if (transaction.status !== "PENDING") {
+      return res.status(400).json({ message: "Transaction is not pending" });
+    }
+
+    // Find user's wallet and restore the balance
+    const wallet = await Wallet.findOne({ user: transaction.user });
+    if (wallet) {
+      wallet.balance += transaction.amount;
+      await wallet.save();
+    }
+
+    // Update transaction status to failed
+    transaction.status = "FAILED";
+    transaction.description += ` - Rejected by admin${
+      reason ? `: ${reason}` : ""
+    }`;
+    await transaction.save();
+
+    // Create notification
+    const notification = new Notification({
+      user: transaction.user,
+      message: `Withdrawal request rejected${
+        reason ? `: ${reason}` : ""
+      }. Amount restored to your wallet.`,
+      type: "ERROR",
+    });
+    await notification.save();
+
+    // Emit socket events for real-time updates
+    if (wallet) {
+      req.io.emit(`wallet_update_${transaction.user}`, {
+        type: "WITHDRAW_REJECTED",
+        balance: wallet.balance,
+        amount: transaction.amount,
+        transactionId: transaction._id,
+      });
+    }
+
+    // Emit notification event
+    req.io.emit(`notification_${transaction.user}`, {
+      type: "WITHDRAW_REJECTED",
+      message: `Withdrawal request rejected${
+        reason ? `: ${reason}` : ""
+      }. Amount restored to your wallet.`,
+      notificationId: notification._id,
+    });
+
+    res.status(200).json({
+      message: "Withdrawal rejected successfully",
+      transactionId: transaction._id,
+    });
+  } catch (error) {
+    console.error("Error rejecting withdrawal:", error);
+    res.status(500).json({
+      message: "Error rejecting withdrawal",
+      error: error.message,
+    });
+  }
+};
+
+// Get pending withdrawals (admin only)
+const getPendingWithdrawals = async (req, res) => {
+  try {
+    const pendingWithdrawals = await Transaction.find({
+      type: "WITHDRAW",
+      status: "PENDING",
+    })
+      .populate("user", "username email")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      pendingWithdrawals,
+      total: pendingWithdrawals.length,
+    });
+  } catch (error) {
+    console.error("Error fetching pending withdrawals:", error);
+    res.status(500).json({
+      message: "Error fetching pending withdrawals",
+      error: error.message,
+    });
+  }
+};
+
+// Verify and process deposit with external transaction verification
+const verifyDeposit = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { 
+      referenceId, 
+      receivedAmount, 
+      receiverName, 
+      receiverAccountNumber, 
+      payerAccountNumber,
+      paymentProvider 
+    } = req.body;
+
+    // Validate required fields
+    if (!referenceId || !receivedAmount || !receiverName || !receiverAccountNumber || !paymentProvider) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields for verification"
+      });
+    }
+
+    if (!["telebirr", "cbe"].includes(paymentProvider)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payment provider"
+      });
+    }
+
+    if (receivedAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid amount"
+      });
+    }
+
+    // Check if transaction already exists (duplicate prevention)
+    const existingTransaction = await Transaction.findOne({
+      'verificationData.referenceId': referenceId,
+      amount: receivedAmount,
+      type: 'DEPOSIT'
+    });
+
+    if (existingTransaction) {
+      return res.status(400).json({
+        success: false,
+        message: 'This transaction has already been processed'
+      });
+    }
+
+    // Import and call the verification service
+    const { verifyTransaction } = require('../services/verifyTransaction');
+    
+    // Verify with external service
+    const verificationResult = await verifyTransaction(paymentProvider, {
+      referenceId,
+      receivedAmount: receivedAmount.toString(),
+      receiverName,
+      receiverAccountNumber,
+      payerAccountNumber: payerAccountNumber || "none"
+    });
+
+    if (!verificationResult.success) {
+      return res.status(400).json({
+        success: false,
+        message: verificationResult.message || "Transaction verification failed"
+      });
+    }
+
+    // Verification successful - process the deposit
+    // Find or create wallet
+    let wallet = await Wallet.findOne({ user: userId });
+    if (!wallet) {
+      wallet = new Wallet({ user: userId, balance: 0 });
+    }
+
+    // Update balance
+    wallet.balance += receivedAmount;
+    await wallet.save();
+
+    // Create transaction record with verification data
+    const transaction = new Transaction({
+      amount: receivedAmount,
+      type: "DEPOSIT",
+      status: "COMPLETED",
+      description: `Deposit via ${paymentProvider} - Verified`,
+      user: userId,
+      externalTransactionId: referenceId,
+      paymentProvider: paymentProvider,
+      verificationData: {
+        referenceId,
+        receivedAmount,
+        receiverName,
+        receiverAccountNumber,
+        payerAccountNumber: payerAccountNumber || "none",
+        verifiedAt: new Date()
+      }
+    });
+    await transaction.save();
+
+    // Update user with wallet reference if not exists
+    if (!req.user.wallet) {
+      await User.findByIdAndUpdate(userId, { wallet: wallet._id });
+    }
+
+    // Create notification
+    const notification = new Notification({
+      user: userId,
+      message: `Successfully deposited ${receivedAmount} ብር via ${paymentProvider} (Verified)`,
+      type: "SUCCESS",
+    });
+    await notification.save();
+
+    // Emit socket event for real-time updates
+    req.io.emit(`wallet_update_${userId}`, {
+      type: "DEPOSIT",
+      balance: wallet.balance,
+      amount: receivedAmount,
+      transactionId: transaction._id,
+    });
+
+    // Emit notification event
+    req.io.emit(`notification_${userId}`, {
+      type: "DEPOSIT_SUCCESS",
+      message: `Successfully deposited ${receivedAmount} ብር via ${paymentProvider} (Verified)`,
+      notificationId: notification._id,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Deposit verified and processed successfully",
+      newBalance: wallet.balance,
+      transactionId: transaction._id,
+      verificationData: verificationResult.data
+    });
+
+  } catch (error) {
+    console.error("Error verifying deposit:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error processing deposit verification",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getWalletBalance,
   depositFunds,
   withdrawFunds,
+  verifyDeposit,
   deductGameStake,
   addGameWinnings,
   getAllTransactions,
@@ -470,4 +760,7 @@ module.exports = {
   getNotifications,
   markNotificationAsRead,
   markAllNotificationsAsRead,
+  approveWithdrawal,
+  rejectWithdrawal,
+  getPendingWithdrawals,
 };

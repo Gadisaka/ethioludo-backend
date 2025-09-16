@@ -17,6 +17,7 @@ const getAds = async (req, res) => {
         ingamead: ads.ingamead,
         yellowboardad: ads.yellowboardad,
         redboardad: ads.redboardad,
+        ethiogamesad: ads.ethiogamesad,
         socialLinks: ads.socialLinks,
       },
     });
@@ -33,10 +34,15 @@ const getAds = async (req, res) => {
 // Upload single image
 const uploadSingleImage = async (req, res) => {
   try {
+    console.log("Upload single image request received");
+    console.log("Request body:", req.body);
+    console.log("File received:", req.file ? req.file.originalname : "none");
+
     const { adType } = req.body;
     const file = req.file;
 
     if (!file) {
+      console.log("No file uploaded");
       return res.status(400).json({
         success: false,
         message: "No file uploaded",
@@ -44,14 +50,37 @@ const uploadSingleImage = async (req, res) => {
     }
 
     if (!adType) {
+      console.log("No ad type provided");
       return res.status(400).json({
         success: false,
         message: "Ad type is required",
       });
     }
 
+    // Check Cloudinary configuration
+    if (
+      !process.env.CLOUDINARY_CLOUD_NAME ||
+      !process.env.CLOUDINARY_API_KEY ||
+      !process.env.CLOUDINARY_API_SECRET
+    ) {
+      console.error("Cloudinary configuration missing");
+      return res.status(500).json({
+        success: false,
+        message: "Image upload service not configured",
+        error: "Missing Cloudinary environment variables",
+      });
+    }
+
+    console.log(
+      "Starting Cloudinary upload for file:",
+      file.originalname,
+      file.size,
+      "bytes"
+    );
+
     // Upload to Cloudinary
     const uploadResult = await uploadImageToCloudinary(file);
+    console.log("File uploaded successfully to Cloudinary");
 
     const imageData = {
       url: uploadResult.secure_url,
@@ -59,21 +88,24 @@ const uploadSingleImage = async (req, res) => {
       uploadedAt: new Date(),
     };
 
+    console.log("Saving to database...");
     // Get or create ads document
     const ads = await AdsandLinks.getOrCreateAds();
 
     // Add image based on type
-    if (["adcode_1", "adcode_2", "adcode_3"].includes(adType)) {
+    if (["adcode_1", "adcode_2", "adcode_3", "ethiogamesad"].includes(adType)) {
       await ads.addAdCodeImage(adType, imageData);
     } else if (["ingamead", "yellowboardad", "redboardad"].includes(adType)) {
       await ads.setBoardAdImage(adType, imageData);
     } else {
+      console.log("Invalid ad type:", adType);
       return res.status(400).json({
         success: false,
         message: "Invalid ad type",
       });
     }
 
+    console.log("Image saved to database successfully");
     res.status(200).json({
       success: true,
       message: "Image uploaded successfully",
@@ -81,6 +113,7 @@ const uploadSingleImage = async (req, res) => {
     });
   } catch (error) {
     console.error("Error uploading image:", error);
+    console.error("Error stack:", error.stack);
     res.status(500).json({
       success: false,
       message: "Error uploading image",
@@ -92,10 +125,15 @@ const uploadSingleImage = async (req, res) => {
 // Upload multiple images
 const uploadMultipleImages = async (req, res) => {
   try {
+    console.log("Upload multiple images request received");
+    console.log("Request body:", req.body);
+    console.log("Files received:", req.files ? req.files.length : 0);
+
     const { adType } = req.body;
     const files = req.files;
 
     if (!files || files.length === 0) {
+      console.log("No files uploaded");
       return res.status(400).json({
         success: false,
         message: "No files uploaded",
@@ -103,22 +141,53 @@ const uploadMultipleImages = async (req, res) => {
     }
 
     if (!adType) {
+      console.log("No ad type provided");
       return res.status(400).json({
         success: false,
         message: "Ad type is required",
       });
     }
 
-    if (!["adcode_1", "adcode_2", "adcode_3"].includes(adType)) {
+    if (
+      !["adcode_1", "adcode_2", "adcode_3", "ethiogamesad"].includes(adType)
+    ) {
+      console.log("Invalid ad type:", adType);
       return res.status(400).json({
         success: false,
-        message: "Multiple images only allowed for ad code types",
+        message:
+          "Multiple images only allowed for ad code and ethiogames types",
+      });
+    }
+
+    console.log("Starting Cloudinary upload for", files.length, "files");
+
+    // Check Cloudinary configuration
+    if (
+      !process.env.CLOUDINARY_CLOUD_NAME ||
+      !process.env.CLOUDINARY_API_KEY ||
+      !process.env.CLOUDINARY_API_SECRET
+    ) {
+      console.error("Cloudinary configuration missing");
+      return res.status(500).json({
+        success: false,
+        message: "Image upload service not configured",
+        error: "Missing Cloudinary environment variables",
       });
     }
 
     // Upload all images to Cloudinary
-    const uploadPromises = files.map((file) => uploadImageToCloudinary(file));
+    const uploadPromises = files.map((file, index) => {
+      console.log(
+        `Uploading file ${index + 1}:`,
+        file.originalname,
+        file.size,
+        "bytes"
+      );
+      return uploadImageToCloudinary(file);
+    });
+
     const uploadResults = await Promise.all(uploadPromises);
+    console.log("All files uploaded successfully to Cloudinary");
 
     const imageDataArray = uploadResults.map((result) => ({
       url: result.secure_url,
@@ -126,6 +195,7 @@ const uploadMultipleImages = async (req, res) => {
       uploadedAt: new Date(),
     }));
 
+    console.log("Saving to database...");
     // Get or create ads document
     const ads = await AdsandLinks.getOrCreateAds();
 
@@ -134,6 +204,7 @@ const uploadMultipleImages = async (req, res) => {
       await ads.addAdCodeImage(adType, imageData);
     }
 
+    console.log("Images saved to database successfully");
     res.status(200).json({
       success: true,
       message: "Images uploaded successfully",
@@ -141,6 +212,7 @@ const uploadMultipleImages = async (req, res) => {
     });
   } catch (error) {
     console.error("Error uploading images:", error);
+    console.error("Error stack:", error.stack);
     res.status(500).json({
       success: false,
       message: "Error uploading images",
@@ -163,7 +235,7 @@ const deleteImage = async (req, res) => {
 
     const ads = await AdsandLinks.getOrCreateAds();
 
-    if (["adcode_1", "adcode_2", "adcode_3"].includes(adType)) {
+    if (["adcode_1", "adcode_2", "adcode_3", "ethiogamesad"].includes(adType)) {
       // Delete from array
       if (imageIndex === undefined || imageIndex === null) {
         return res.status(400).json({

@@ -41,6 +41,15 @@ const adsandLinksSchema = new mongoose.Schema({
     uploadedAt: { type: Date },
   },
 
+  // Ethiogames Homepage Ads - Array of image URLs
+  ethiogamesad: [
+    {
+      url: { type: String, required: true },
+      publicId: { type: String, required: true },
+      uploadedAt: { type: Date, default: Date.now },
+    },
+  ],
+
   // Social Links (for future use)
   socialLinks: {
     facebook: { type: String },
@@ -73,6 +82,7 @@ adsandLinksSchema.statics.getOrCreateAds = async function () {
       adcode_1: [],
       adcode_2: [],
       adcode_3: [],
+      ethiogamesad: [],
       socialLinks: {},
     });
     await ads.save();
@@ -82,7 +92,7 @@ adsandLinksSchema.statics.getOrCreateAds = async function () {
 
 // Method to add image to ad code array
 adsandLinksSchema.methods.addAdCodeImage = function (adType, imageData) {
-  if (["adcode_1", "adcode_2", "adcode_3"].includes(adType)) {
+  if (["adcode_1", "adcode_2", "adcode_3", "ethiogamesad"].includes(adType)) {
     this[adType].push(imageData);
   }
   return this.save();
@@ -98,7 +108,7 @@ adsandLinksSchema.methods.setBoardAdImage = function (adType, imageData) {
 
 // Method to remove image from ad code array
 adsandLinksSchema.methods.removeAdCodeImage = function (adType, imageIndex) {
-  if (["adcode_1", "adcode_2", "adcode_3"].includes(adType)) {
+  if (["adcode_1", "adcode_2", "adcode_3", "ethiogamesad"].includes(adType)) {
     this[adType].splice(imageIndex, 1);
   }
   return this.save();

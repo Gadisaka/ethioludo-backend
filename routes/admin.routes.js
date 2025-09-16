@@ -7,6 +7,7 @@ router.get("/dashboard", async (req, res) => {
     const User = require("../model/User.js");
     const GameHistory = require("../model/GameHistory.js");
     const Transaction = require("../model/Transaction.js");
+    const GameSetting = require("../model/gameSetting.js");
 
     // Get users count
     const users = await User.find().select("username email status createdAt");
@@ -23,11 +24,25 @@ router.get("/dashboard", async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(100);
 
+    // Get cut percentage setting
+    let cutPercentage = 10; // Default fallback
+    try {
+      const cutSetting = await GameSetting.findOne({
+        settingKey: "GAME_CUT_PERCENTAGE",
+      });
+      if (cutSetting) {
+        cutPercentage = parseFloat(cutSetting.settingValue) || 10;
+      }
+    } catch (error) {
+      console.error("Error fetching cut percentage:", error);
+    }
+
     // Return combined dashboard data
     res.status(200).json({
       users: users,
       games: games,
       transactions: transactions,
+      cutPercentage: cutPercentage,
       timestamp: new Date(),
     });
   } catch (error) {

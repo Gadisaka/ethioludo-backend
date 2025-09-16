@@ -26,6 +26,15 @@ const authorizeRole = (role) => (req, res, next) => {
   next();
 };
 
+const requireAdmin = (req, res, next) => {
+  if (req.user.role !== "ADMIN") {
+    return res
+      .status(403)
+      .json({ message: "Access denied. Requires ADMIN role." });
+  }
+  next();
+};
+
 // Middleware to add socket.io to request object
 const addSocketIO = (io) => (req, res, next) => {
   req.io = io;
@@ -35,5 +44,6 @@ const addSocketIO = (io) => (req, res, next) => {
 module.exports = {
   authenticateToken,
   authorizeRole,
-  addSocketIO
+  requireAdmin,
+  addSocketIO,
 };

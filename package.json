@@ -12,13 +12,19 @@
     "test:race": "jest socket/bots/race.test.js --verbose",
     "test:simulation": "jest socket/bots/simulation.test.js --verbose",
     "simulate:bots": "jest socket/bots/simulation.test.js --verbose --runInBand",
-    "start": "nodemon index.js"
+    "start": "nodemon index.js",
+    "seed": "node seed/index.js",
+    "seed:admin": "node seed/admin.js",
+    "seed:banks": "node seed/banks.js",
+    "seed:all": "node seed/index.js",
+    "check-env": "node check-env.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "axios": "^1.11.0",
     "bcryptjs": "^3.0.2",
     "cloudinary": "^2.7.0",
     "cors": "^2.8.5",

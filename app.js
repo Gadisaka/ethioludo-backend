@@ -8,6 +8,7 @@ const AdminRoutes = require("./routes/admin.routes.js");
 const GameSettingRoutes = require("./routes/gameSetting.routes.js");
 const AdsRoutes = require("./routes/ads.routes.js");
 const PublicAdsRoutes = require("./routes/publicAds.routes.js");
+const BankRoutes = require("./routes/bank.routes.js");
 
 const app = express();
 
@@ -28,6 +29,7 @@ app.use("/admin", AdminRoutes);
 app.use("/admin/settings", GameSettingRoutes);
 app.use("/admin/ads", AdsRoutes);
 app.use("/ads", PublicAdsRoutes);
+app.use("/banks", BankRoutes);
 app.use("/upload", require("./config/uploadRoute"));
 
 // Add basic route for testing
