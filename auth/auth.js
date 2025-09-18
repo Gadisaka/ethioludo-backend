@@ -65,7 +65,8 @@ router.post("/login", async (req, res) => {
       },
       process.env.JWT_SECRET,
       {
-        expiresIn: "72h",
+        //1year
+        expiresIn: "365d",
       }
     );
     res.set("Authorization", `Bearer ${token}`);
