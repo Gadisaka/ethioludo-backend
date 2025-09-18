@@ -12,8 +12,6 @@
     "test:race": "jest socket/bots/race.test.js --verbose",
     "test:simulation": "jest socket/bots/simulation.test.js --verbose",
     "simulate:bots": "jest socket/bots/simulation.test.js --verbose --runInBand",
-    "test:telegram": "node test-telegram-auth.js",
-    "migrate:telegram": "node scripts/migrate-to-telegram-auth.js",
     "start": "nodemon index.js",
     "seed": "node seed/index.js",
     "seed:admin": "node seed/admin.js",
