@@ -6,9 +6,17 @@ const Role = {
 };
 
 const userSchema = new mongoose.Schema({
-  phone: { type: String, unique: true, required: true },
+  // Telegram authentication fields
+  telegram_id: { type: Number, unique: true, sparse: true }, // Made optional and sparse for legacy users
   username: { type: String, required: true },
-  password: { type: String, required: true },
+  first_name: { type: String },
+  last_name: { type: String },
+  phone_number: { type: String }, // Optional, collected via Telegram Mini App
+
+  // Legacy fields (deprecated but kept for compatibility)
+  phone: { type: String, unique: true, sparse: true }, // Made optional and sparse
+  password: { type: String }, // Made optional for Telegram users
+
   role: { type: String, enum: Object.values(Role), default: Role.PLAYER },
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now },

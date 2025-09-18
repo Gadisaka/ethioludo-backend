@@ -4,8 +4,12 @@ const jwt = require("jsonwebtoken");
 // const prisma = require("../prisma/prismaClient.js");
 
 const User = require("../model/User");
+const telegramAuth = require("./telegramAuth");
 
 const router = express.Router();
+
+// Include Telegram authentication routes
+router.use("/telegram", telegramAuth);
 
 router.post("/register", async (req, res) => {
   const { phone, password } = req.body;
