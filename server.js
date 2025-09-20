@@ -7,9 +7,13 @@ const server = http.createServer(app);
 const io = setupSocketServer(server);
 
 // Make io available to the app
-app.set('io', io);
+app.set("io", io);
 
 connectDB();
+
+// Initialize Telegram bot
+console.log("🤖 Initializing Telegram bot...");
+require("./services/telegramBot");
 
 server.on("error", (error) => {
   console.error("Server error:", error);

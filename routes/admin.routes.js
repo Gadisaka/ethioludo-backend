@@ -1,5 +1,13 @@
 const express = require("express");
 const router = express.Router();
+const {
+  authenticateToken,
+  requireAdmin,
+} = require("../middleware/authMiddleware.js");
+
+// Apply authentication middleware to all admin routes
+router.use(authenticateToken);
+router.use(requireAdmin);
 
 // Admin Dashboard Overview - Get all data for dashboard
 router.get("/dashboard", async (req, res) => {
@@ -440,6 +448,7 @@ router.post("/send-notification", async (req, res) => {
   try {
     const User = require("../model/User.js");
     const Notification = require("../model/Notification.js");
+    const axios = require("axios");
 
     const { message, type = "INFO" } = req.body;
 
@@ -496,11 +505,36 @@ router.post("/send-notification", async (req, res) => {
     // Bulk insert notifications
     const createdNotifications = await Notification.insertMany(notifications);
 
+    // Send to Telegram users as well using internal function
+    let telegramResult = null;
+    try {
+      const {
+        broadcastToTelegramUsers,
+      } = require("../services/telegramBot.js");
+      telegramResult = await broadcastToTelegramUsers(
+        message.trim(),
+        notificationType
+      );
+
+      if (telegramResult.success) {
+        console.log(
+          `📱 Telegram broadcast: ${telegramResult.sentCount}/${telegramResult.totalUsers} users reached`
+        );
+      }
+    } catch (telegramError) {
+      console.error("Error sending Telegram broadcast:", telegramError.message);
+      telegramResult = {
+        success: false,
+        error: telegramError.message,
+      };
+    }
+
     res.status(200).json({
       success: true,
       message: "Notification sent successfully to all users",
       userCount: users.length,
       notificationCount: createdNotifications.length,
+      telegramResult,
       timestamp: new Date(),
     });
   } catch (error) {
@@ -676,6 +710,152 @@ router.patch("/games/:gameId/status", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Error updating game status",
+      error: error.message,
+    });
+  }
+});
+
+// Admin - Get Current Admin Profile
+router.get("/profile", async (req, res) => {
+  try {
+    const User = require("../model/User.js");
+
+    // Get admin ID from token (stored in req.user after auth middleware)
+    const adminId = req.user.id;
+
+    const admin = await User.findById(adminId).select(
+      "_id username phone email role createdAt updatedAt"
+    );
+
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message: "Admin profile not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      admin: admin,
+      timestamp: new Date(),
+    });
+  } catch (error) {
+    console.error("Error fetching admin profile:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching admin profile",
+      error: error.message,
+    });
+  }
+});
+
+// Admin - Update Admin Profile
+router.patch("/profile", async (req, res) => {
+  try {
+    const User = require("../model/User.js");
+    const bcrypt = require("bcryptjs");
+
+    // Get admin ID from token (stored in req.user after auth middleware)
+    const adminId = req.user.id;
+
+    const { phone, email, currentPassword, newPassword } = req.body;
+
+    // Validate input
+    if (!phone || phone.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number is required",
+      });
+    }
+
+    if (!email || email.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is required",
+      });
+    }
+
+    // Get current admin data
+    const currentAdmin = await User.findById(adminId);
+    if (!currentAdmin) {
+      return res.status(404).json({
+        success: false,
+        message: "Admin profile not found",
+      });
+    }
+
+    // Check if phone is being changed and if it already exists
+    if (phone && phone !== currentAdmin.phone) {
+      const existingUser = await User.findOne({ phone: phone });
+      if (existingUser) {
+        return res.status(400).json({
+          success: false,
+          message: "Phone number already exists",
+        });
+      }
+    }
+
+    // Check if email is being changed and if it already exists
+    if (email && email !== currentAdmin.email) {
+      const existingUser = await User.findOne({ email: email });
+      if (existingUser) {
+        return res.status(400).json({
+          success: false,
+          message: "Email already exists",
+        });
+      }
+    }
+
+    // Prepare update data
+    const updateData = {
+      phone: phone.trim(),
+      email: email.trim(),
+      updatedAt: new Date(),
+    };
+
+    // Handle password change if provided
+    if (newPassword) {
+      if (!currentPassword) {
+        return res.status(400).json({
+          success: false,
+          message: "Current password is required to change password",
+        });
+      }
+
+      // Verify current password
+      const isCurrentPasswordValid = await bcrypt.compare(
+        currentPassword,
+        currentAdmin.password
+      );
+      if (!isCurrentPasswordValid) {
+        return res.status(400).json({
+          success: false,
+          message: "Current password is incorrect",
+        });
+      }
+
+      // Hash new password
+      const saltRounds = 10;
+      updateData.password = await bcrypt.hash(newPassword, saltRounds);
+    }
+
+    // Update admin profile
+    const updatedAdmin = await User.findByIdAndUpdate(adminId, updateData, {
+      new: true,
+      runValidators: true,
+    }).select("_id username phone email role createdAt updatedAt");
+
+    res.status(200).json({
+      success: true,
+      message: "Admin profile updated successfully",
+      admin: updatedAdmin,
+      timestamp: new Date(),
+    });
+  } catch (error) {
+    console.error("Error updating admin profile:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error updating admin profile",
       error: error.message,
     });
   }

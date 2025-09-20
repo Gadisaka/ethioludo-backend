@@ -106,6 +106,194 @@ function maybeTriggerAutoMove(io, roomId) {
   }
 }
 
+// Start turn timeout for current player
+function startTurnTimeout(io, roomId) {
+  const room = gameManager.getRoom(roomId);
+  if (!room || room.gameStatus !== gameManager.GAME_STATUS.PLAYING) return;
+
+  // Clear any existing timeout
+  gameManager.clearTurnTimeout(roomId);
+
+  // Start new timeout
+  gameManager.setTurnTimeout(
+    roomId,
+    () => {
+      handleTurnTimeout(io, roomId);
+    },
+    35000
+  ); // 32 seconds (2 seconds buffer for frontend sync)
+
+  console.log(
+    `[TURN_TIMEOUT] Started 32s timeout for player ${room.currentTurn} in room ${roomId}`
+  );
+}
+
+// Handle turn timeout - make inactive player lose
+async function handleTurnTimeout(io, roomId) {
+  try {
+    const room = gameManager.getRoom(roomId);
+    if (!room || room.gameStatus !== gameManager.GAME_STATUS.PLAYING) return;
+
+    const currentPlayerId = room.currentTurn;
+    const currentPlayer = room.players.find((p) => p.id === currentPlayerId);
+
+    if (!currentPlayer) return;
+
+    console.log(
+      `[TURN_TIMEOUT] Player ${currentPlayer.name} (${currentPlayerId}) timed out in room ${roomId}`
+    );
+
+    // Find the other player (winner)
+    const otherPlayer = room.players.find((p) => p.id !== currentPlayerId);
+    if (!otherPlayer) return;
+
+    // End the game with timeout as reason
+    room.gameStatus = gameManager.GAME_STATUS.FINISHED;
+
+    const matchResults = {
+      winner: {
+        id: otherPlayer.id,
+        name: otherPlayer.name,
+        userId: otherPlayer.userId,
+        color: otherPlayer.color,
+      },
+      loser: {
+        id: currentPlayer.id,
+        name: currentPlayer.name,
+        userId: currentPlayer.userId,
+        color: currentPlayer.color,
+      },
+      reason: "turn_timeout",
+      gameDuration: Date.now() - room.createdAt,
+      requiredPieces: room.gameSettings.requiredPieces || 2,
+      stake: room.gameSettings.stake || 50,
+    };
+
+    // Save game history to database for both players
+    try {
+      const GameHistory = require("../model/GameHistory");
+      const GameRoom = require("../model/GameRoom");
+
+      console.log(
+        `[TURN_TIMEOUT] Creating GameHistory records for room ${roomId}`
+      );
+
+      // Create GameHistory record for the winner
+      if (otherPlayer?.userId) {
+        const winnerHistoryRecord = await GameHistory.create({
+          user: otherPlayer.userId,
+          roomId,
+          status: gameManager.GAME_STATUS.FINISHED,
+          players: room.players,
+          winnerId: otherPlayer.userId,
+          stake: room.gameSettings.stake,
+          requiredPieces: room.gameSettings.requiredPieces,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+
+        console.log(
+          `[TURN_TIMEOUT] Winner game history saved:`,
+          winnerHistoryRecord._id
+        );
+      }
+
+      // Create GameHistory record for the loser (the one who timed out)
+      if (currentPlayer?.userId) {
+        const loserHistoryRecord = await GameHistory.create({
+          user: currentPlayer.userId,
+          roomId,
+          status: gameManager.GAME_STATUS.FINISHED,
+          players: room.players,
+          winnerId: otherPlayer?.userId,
+          stake: room.gameSettings.stake,
+          requiredPieces: room.gameSettings.requiredPieces,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+
+        console.log(
+          `[TURN_TIMEOUT] Loser game history saved:`,
+          loserHistoryRecord._id
+        );
+      }
+
+      // Update GameRoom status in database
+      await GameRoom.updateOne(
+        { roomId },
+        {
+          $set: {
+            gameStatus: gameManager.GAME_STATUS.FINISHED,
+            players: room.players,
+            updatedAt: new Date(),
+          },
+        }
+      );
+
+      console.log(
+        `[TURN_TIMEOUT] GameRoom status updated to finished for room ${roomId}`
+      );
+    } catch (error) {
+      console.error(
+        `[TURN_TIMEOUT] Error saving game history for timeout win in room ${roomId}:`,
+        error
+      );
+    }
+
+    // Emit game over event
+    io.to(roomId).emit("game_over", matchResults);
+
+    // Update winner's wallet with game winnings (only if winner is not a bot)
+    if (!otherPlayer.isBot && otherPlayer.userId) {
+      try {
+        const { addGameWinnings } = require("../controllers/wallet.controller");
+        const isBotGame = room.players.some((p) => p.isBot);
+
+        await addGameWinnings(
+          otherPlayer.userId,
+          room.gameSettings.stake,
+          roomId,
+          isBotGame
+        );
+        console.log(
+          `[TURN_TIMEOUT] Added winnings to winner ${otherPlayer.name} in room ${roomId}`
+        );
+      } catch (error) {
+        console.error(
+          `[TURN_TIMEOUT] Error updating winner's wallet in room ${roomId}:`,
+          error
+        );
+      }
+    } else {
+      console.log(
+        `[TURN_TIMEOUT] Skipping wallet update - winner is a bot or has no userId: ${otherPlayer.name}`
+      );
+    }
+
+    // Notify bot controller about game end
+    botController.handleGameEnd(roomId);
+
+    // Schedule room cleanup after 30 seconds (give players time to see results)
+    setTimeout(() => {
+      try {
+        gameManager.deleteRoom(roomId);
+        console.log(`[TURN_TIMEOUT] Room ${roomId} cleaned up after timeout`);
+      } catch (error) {
+        console.error(
+          `[TURN_TIMEOUT] Error cleaning up room ${roomId}:`,
+          error
+        );
+      }
+    }, 30000); // 30 seconds delay
+
+    console.log(
+      `[TURN_TIMEOUT] Game ended due to timeout in room ${roomId}. Winner: ${otherPlayer.name}`
+    );
+  } catch (error) {
+    console.error(`Error in handleTurnTimeout for room ${roomId}:`, error);
+  }
+}
+
 // Helper: animate token movement step-by-step (reuse from move_piece)
 async function emitPathStepByStep(
   roomId,
@@ -1346,6 +1534,11 @@ function registerSocketHandlers(io) {
             gameSettings: room.gameSettings,
           });
 
+          // Start turn timeout if game is playing
+          if (room.gameStatus === gameManager.GAME_STATUS.PLAYING) {
+            startTurnTimeout(io, roomId);
+          }
+
           // Notify bot controller about turn change (only if bots are enabled)
           if (room.currentTurn && BOT_CONFIG.BOTS_ENABLED) {
             botController.handleTurnChange(roomId, room.currentTurn);
@@ -1450,6 +1643,9 @@ function registerSocketHandlers(io) {
           socket.emit("error_message", "Not your turn!");
           return;
         }
+
+        // Clear turn timeout since player is actively playing
+        gameManager.clearTurnTimeout(roomId);
         if (
           room.lastRoll &&
           room.lastRoll.roller === socket.id &&
@@ -1517,6 +1713,9 @@ function registerSocketHandlers(io) {
                 gameStatus: room.gameStatus,
                 lastRoll: room.lastRoll,
               });
+
+              // Start turn timeout for next player
+              startTurnTimeout(io, roomId);
               return;
             }
             const movableTokens = getMovableTokens(
@@ -1625,6 +1824,9 @@ function registerSocketHandlers(io) {
             // }
 
             maybeTriggerAutoMove(io, roomId);
+
+            // Restart turn timeout since player is actively playing
+            startTurnTimeout(io, roomId);
           } catch (error) {
             console.error(
               `Error in roll_dice timeout for room ${roomId}:`,
@@ -1671,6 +1873,9 @@ function registerSocketHandlers(io) {
           socket.emit("error_message", "You must roll the dice again!");
           return;
         }
+
+        // Clear turn timeout since player is actively playing
+        gameManager.clearTurnTimeout(roomId);
         const gameState = gameManager.getGameState(roomId);
         const piece = gameState.pieces[color][pieceIndex];
         if (piece === `${color}WinZone`) {
@@ -1893,6 +2098,9 @@ function registerSocketHandlers(io) {
           console.log(
             `[MovePiece] Turn not advanced in room ${roomId}. Roll: ${rollValue}, Killed piece: ${!!killedPieceInfo}, Next position: ${nextPosition}`
           );
+
+          // Restart turn timeout since player gets another turn
+          startTurnTimeout(io, roomId);
         }
         const path = generateNewPath(piece, rollValue, color);
         emitPathStepByStep(
@@ -1919,6 +2127,9 @@ function registerSocketHandlers(io) {
                 gameStatus: room.gameStatus,
                 lastRoll: room.lastRoll,
               });
+
+              // Start turn timeout for next player
+              startTurnTimeout(io, roomId);
 
               // Notify bot controller about turn change (only if bots are enabled)
               if (room.currentTurn && BOT_CONFIG.BOTS_ENABLED) {

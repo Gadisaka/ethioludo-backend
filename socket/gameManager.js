@@ -24,6 +24,7 @@ class RoomState {
     this.roomDeletionTimeout = null;
     this.disconnectedAutoMoveTimers = new Map();
     this.autoMoveCount = new Map();
+    this.turnTimeout = null; // Timer for turn timeout
     this.joinLock = false; // Simple in-memory lock for join operations
   }
 
@@ -39,6 +40,11 @@ class RoomState {
     // Clear all auto-move timers
     this.disconnectedAutoMoveTimers.forEach((timer) => clearTimeout(timer));
     this.disconnectedAutoMoveTimers.clear();
+    // Clear turn timeout
+    if (this.turnTimeout) {
+      clearTimeout(this.turnTimeout);
+      this.turnTimeout = null;
+    }
   }
 
   /**
@@ -298,6 +304,31 @@ class GameManager {
 
   getRoomCount() {
     return this.rooms.size;
+  }
+
+  // Turn timeout methods
+  setTurnTimeout(roomId, timeoutCallback, timeoutMs = 30000) {
+    const room = this.getRoom(roomId);
+    if (!room) return;
+
+    // Clear existing timeout
+    this.clearTurnTimeout(roomId);
+
+    // Set new timeout
+    room.turnTimeout = setTimeout(() => {
+      timeoutCallback();
+      room.turnTimeout = null;
+    }, timeoutMs);
+  }
+
+  clearTurnTimeout(roomId) {
+    const room = this.getRoom(roomId);
+    if (!room) return;
+
+    if (room.turnTimeout) {
+      clearTimeout(room.turnTimeout);
+      room.turnTimeout = null;
+    }
   }
 
   // Cleanup methods

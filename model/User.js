@@ -8,9 +8,12 @@ const Role = {
 const userSchema = new mongoose.Schema({
   phone: { type: String, unique: true, required: true },
   username: { type: String, required: true },
+  email: { type: String, unique: true, sparse: true }, // Optional email field
   password: { type: String, required: true },
   role: { type: String, enum: Object.values(Role), default: Role.PLAYER },
   isActive: { type: Boolean, default: true },
+  resetCode: { type: String }, // For password reset
+  resetCodeExpires: { type: Date }, // Reset code expiry
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
   wallet: { type: mongoose.Schema.Types.ObjectId, ref: "Wallet" },

@@ -9,6 +9,7 @@ const GameSettingRoutes = require("./routes/gameSetting.routes.js");
 const AdsRoutes = require("./routes/ads.routes.js");
 const PublicAdsRoutes = require("./routes/publicAds.routes.js");
 const BankRoutes = require("./routes/bank.routes.js");
+const TelegramRoutes = require("./routes/telegram.routes.js");
 
 const app = express();
 
@@ -31,6 +32,7 @@ app.use("/admin/ads", AdsRoutes);
 app.use("/ads", PublicAdsRoutes);
 app.use("/banks", BankRoutes);
 app.use("/upload", require("./config/uploadRoute"));
+app.use("/api", TelegramRoutes);
 
 // Add basic route for testing
 app.get("/", (req, res) => {
