@@ -233,7 +233,7 @@ bot.start(async (ctx) => {
               ),
             ],
 
-            [Markup.button.url("📢 ቻናል ይቀላቀሉ", "https://t.me/ethiogamess_bot")],
+            [Markup.button.url("📢 ቻናል ይቀላቀሉ", "https://t.me/EthioGame5")],
             [
               Markup.button.callback("ℹ️ Help", "help"),
               Markup.button.callback("📞 Support", "support"),
